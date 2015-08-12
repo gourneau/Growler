@@ -149,10 +149,8 @@ class HTTPResponse(object):
         self.headers['location'] = location
 
     def links(self, links):
-        """Sets the Link """
-        s = []
-        for rel in links:
-            s.append("<{}>; rel=\"{}\"".format(links[rel], rel))
+        """Sets the response's Link header"""
+        s = ["<%s>; rel=\"%s\"" % pair for pair in links.items()]
         self.headers['Link'] = ','.join(s)
 
     # def send(self, obj, status = 200):
