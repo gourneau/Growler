@@ -29,6 +29,10 @@ import os
 import types
 import logging
 
+from .utils.event_manager import (
+    event_emitter,
+    emits
+)
 from .http import (
     HTTPRequest,
     HTTPResponse,
@@ -40,7 +44,10 @@ from .http.errors import (
 )
 from .router import Router
 
-
+@event_emitter(events=('startup',
+                       'shutdown',
+                       'connection',
+                       'error'))
 class Application(object):
     """
     A Growler application object. You can use a 'raw' app and modify it by
@@ -126,7 +133,7 @@ class Application(object):
 
         self.config = kw
 
-        self.loop = asyncio.get_event_loop() if loop is None else loop
+        self.loop = asyncio.get_event_loop() if (loop is None) else loop
         self.loop.set_debug(debug)
 
         self.middleware = []  # [{'path': None, 'cb' : self._middleware_boot}]
