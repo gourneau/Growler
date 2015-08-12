@@ -2,19 +2,7 @@
 # growler/http/request.py
 #
 
-from urllib.parse import (unquote, urlparse, parse_qs)
-from .errors import (
-    HTTPErrorBadRequest,
-    HTTPErrorVersionNotSupported,
-    HTTPErrorNotImplemented
-)
-
-from . import Parser
-from termcolor import colored
-
 import asyncio
-
-from pprint import pprint
 
 
 class HTTPRequest(object):
@@ -24,43 +12,39 @@ class HTTPRequest(object):
     function.
     """
 
+    _protocol = None
+    headers = None
+    body = None
+
     def __init__(self, protocol, headers):
         """
         The HTTPRequest object is all the information you could want about the
         incoming http connection. It gets passed along with the HTTPResponse
         object to all the middleware of the app.
 
-        @param protocol growler.HTTPProtocol: A reference to the protocol which
-            was responsible for handling the client's request and creating this
-            HTTPRequest object.
+        :param protocol growler.HTTPProtocol: A reference to the protocol which
+            was responsible for handling th e client's request and creating
+            this HTTPRequest object.
 
-        @param headers dict: The headers gathered from the incoming stream
+        :param headers dict: The headers gathered from the incoming stream
         """
         self._protocol = protocol
-        self.ip = protocol.socket.getpeername()[0]
-        self.protocol = 'https' if protocol.cipher else 'http'
-        self.app = protocol.http_application
-        self.method = protocol.request['method']
         self.headers = headers
-        self.hostname = headers['HOST']
-        self.originalURL = protocol.request['url'].path
-        self.body = asyncio.Future() if 'CONTENT-LENGTH' in headers else None
-        self.path = protocol.request['url'].path
+
+        if 'CONTENT-LENGTH' in headers:
+            self.body = asyncio.Future()
 
     def param(self, name, default=None):
         """
         Return value of HTTP parameter 'name' if found, else return provided
         'default'
 
-        @param name: Key to search the query dict for
-        @type name: str
+        :param name: Key to search the query dict for
+        :type name: str
 
-        @param default: Returned if 'name' is not found in the query dict
+        :param default: Returned if 'name' is not found in the query dict
         """
-        try:
-            return self.query[name]
-        except KeyError:
-            return default
+        return self.query.get(name, default)
 
     def get_body(self, timeout=0):
         """
@@ -74,6 +58,52 @@ class HTTPRequest(object):
         """
         if self.body is None:
             return None
-        coro = asyncio.wait_for(self.body, timeout, loop=self._protocol.loop)
+        coro = asyncio.wait_for(self.body, timeout, loop=self.loop)
         self._protocol.loop.run_until_complete(coro)
         return self.body.result()
+
+    def type_is(self, mime_type):
+        """
+        returns True if content-type of the request matches the mime_type
+        parameter.
+        """
+        return self.headers['content-type'] == mime_type
+
+    @property
+    def ip(self):
+        return self._protocol.socket.getpeername()[0]
+
+    @property
+    def app(self):
+        return self._protocol.http_application
+
+    @property
+    def path(self):
+        return self._protocol.request['url'].path
+
+    @property
+    def originalURL(self):
+        return self._protocol.request['url'].path
+
+    @property
+    def loop(self):
+        return self._protocol.loop
+
+    @property
+    def query(self):
+        return self._protocol.client_query
+
+    @property
+    def hostname(self):
+        return self.headers['HOST']
+
+    @property
+    def method(self):
+        return self._protocol.client_method
+
+    @property
+    def protocol(self):
+        """
+        The name of the protocol being used
+        """
+        return 'https' if (self.protocol.cipher) else 'http'

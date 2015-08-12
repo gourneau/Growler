@@ -14,16 +14,20 @@ popular web frameworks.
 A simple app can be created raw (no subclassing) and then decorate functions or
 a class to modify the behavior of the app. (decorators explained elsewhere)
 
-app = growler.App()
+.. code:: python
 
-@app.use
-def myfunc(req, res):
-    print("myfunc")
+    app = growler.App()
+
+    @app.use
+    def myfunc(req, res):
+        print("myfunc")
 
 """
 
 import asyncio
 import os
+import types
+import logging
 
 from .http import (
     HTTPRequest,
@@ -69,53 +73,60 @@ class Application(object):
 
     def __init__(self,
                  name=__name__,
-                 loop=asyncio.get_event_loop(),
+                 loop=None,
                  debug=True,
                  request_class=HTTPRequest,
                  response_class=HTTPResponse,
+                 protocol_factory=GrowlerHTTPProtocol.get_factory,
                  **kw
                  ):
         """
         Creates an application object.
 
-        @param name: does nothing right now
-        @type name: str
+        :param name: does nothing right now
+        :type name: str
 
-        @param loop: The event loop to run on
-        @type loop: asyncio.AbstractEventLoop
+        :param loop: The event loop to run on
+        :type loop: asyncio.AbstractEventLoop
 
-        @param debug: (de)Activates the loop's debug setting
-        @type debug: boolean
+        :param debug: (de)Activates the loop's debug setting
+        :type debug: boolean
 
-        @param request_class: The factory of request objects, the default of
+        :param request_class: The factory of request objects, the default of
             which is growler.HTTPRequest. This should only be set in special
             cases, like debugging or if the dev doesn't want to modify default
             request objects via middleware.
-        @type request_class: runnable
+        :type request_class: runnable
 
-        @param response_class: The factory of response objects, the default of
+        :param response_class: The factory of response objects, the default of
             which is growler.HTTPResponse. This should only be set in special
             cases, like debugging or if the dev doesn't want to modify default
             response objects via middleware.
-        @type response_class: runnable
+        :type response_class: runnable
 
-        @param kw: Any other custom variables for the application. This dict is
+
+        :param protocol_factory: Factory function this application uses to
+            construct the asyncio protocol object which responds to client
+            connections. The default is the GrowlerHTTPProtocol.get_factory
+            method, which simply
+        :type protocol_factory: runnable
+
+        :param kw: Any other custom variables for the application. This dict is
             stored as 'self.config' in the application. These variables are
             accessible by the application's dict-access, as in:
-                app = app(..., val='VALUE')
-                app['var'] #=> val
 
-        @type kw: dict
+            ``app = app(..., val='VALUE')``
+            ``app['val'] #=> VALUE``
+
+        :type kw: dict
+
         """
         self.name = name
-        self.cache = {}
+        self._cache = {}
 
         self.config = kw
 
-        # rendering engines
-        self.engines = {}
-        self.patterns = []
-        self.loop = loop
+        self.loop = asyncio.get_event_loop() if loop is None else loop
         self.loop.set_debug(debug)
 
         self.middleware = []  # [{'path': None, 'cb' : self._middleware_boot}]
@@ -132,13 +143,14 @@ class Application(object):
             'headers': [],
             'error': [],
             'http_error': [],
-            }
+        }
         self.error_handlers = []
 
         self._wait_for = [asyncio.sleep(0.1)]
 
         self._request_class = request_class
         self._response_class = response_class
+        self._protocol_factory = protocol_factory
 
     def __call__(self, req, res):
         """
@@ -187,8 +199,6 @@ class Application(object):
         Called before running the server, ensures all required coroutines have
         finished running.
         """
-        # print("[wait_for_all] Begin ", self._wait_for)
-
         for x in self._wait_for:
             yield from x
 
@@ -232,41 +242,40 @@ class Application(object):
         Use the middleware (a callable with parameters res, req, next) upon
         requests match the provided path. A None path matches every request.
         Returns 'self' so the middleware may be nicely chained.
+
+        :param middleware callable: A function with signature '(req, res)' to
+                                    be called with every request which matches
+                                    'path'
+        :param path: A string or regex wich will be used to match request
+                     paths.
         """
-        print("[App::use] Adding middleware <{}>".format(middleware))
-        self.middleware.append(middleware)
+        debug = "[App::use] Adding middleware <{}> listening on path {}"
+        if hasattr(middleware, '__growler_router'):
+            router = getattr(middleware, '__growler_router')
+            if isinstance(router, types.MethodType):
+                router = router()
+            self.add_router(path, router)
+        elif hasattr(middleware, '__iter__'):
+            for mw in middleware:
+                self.use(mw, path)
+        else:
+            logging.info(debug.format(middleware, path))
+            self.middleware.append(middleware)
         return self
 
     def add_router(self, path, router):
         """
         Adds a router to the list of routers
-        @type path: str
-        @type router: growler.Router
-        """
-        self.routers.append(router)
 
-    def _find_route(self, method, path):
-        """
-        Internal function for finding a route which matches the path
-        """
-        found = None
-        for r in self.patterns:
-            print('r', r)
-            if r[1] == path:
-                print("path matches!!!")
-                # self.route_to_use.set_result(r(2))
-                # return
-                found = r[2]
-                print("found:: ", found)
-                break
-        self.route_to_use.set_result(found)
-        print("_find_route done ({})".format(found))
-        if found is None:
-            raise HTTPErrorNotFound()
+        :param path: The path the router binds to
+        :type path: str
 
-    def print_router_tree(self):
-        for r in self.routers:
-            r.print_tree()
+        :param router: The router which will respond to objects
+        :type router: growler.Router
+        """
+        debug = "[App::add_router] Adding router {} on path {}"
+        print(debug.format(router, path))
+        self.router.add_router(path, router)
 
     def middleware_chain(self, req):
         """
@@ -276,13 +285,22 @@ class Application(object):
         yield from self.middleware
         yield from self.router.middleware_chain(req)
 
-    def next_error_handler(self, req):
-        for cb in self.error_handlers:
-            yield cb
-        yield self.default_404
+    def next_error_handler(self, req=None):
+        """
+        A generator providing the chain of error handlers for server exception
+        catching. If there are no error handlers set, the app will use the
+        classmethod 'default_error_handler'.
+
+        An optional 'req' parameter is present in the event that request
+        specific  handling (i.e. by path or session) is neccessary. This is
+        currently unimplemented and should be ignored.
+        """
+        if len(self.error_handlers) == 0:
+            yield self.default_error_handler
+        yield from self.error_handlers
 
     @classmethod
-    def default_404(cls, req, res, error):
+    def default_error_handler(cls, req, res, error):
         html = ("<html><head><title>404 - Not Found</title></head><body>"
                 "<h1>404 - Not Found</h1><hr>"
                 "<p style='font-family:monospace;'>"
@@ -323,6 +341,7 @@ class Application(object):
     def __setitem__(self, key, value):
         """Sets a member of the application's configuration."""
         self.config[key] = value
+        return value
 
     def __getitem__(self, key):
         """Gets a member of the application's configuration."""
@@ -332,11 +351,15 @@ class Application(object):
         """Deletes a configuration parameter from the web-app"""
         del self.config[key]
 
+    def __contains__(self, key):
+        """Returns whether a key is in the application configuration."""
+        return self.config.__contains__(key)
+
     #
     # Helper Functions for easy server creation
     #
 
-    def create_server(self, **server_config):
+    def create_server(self, gen_coroutine=False, **server_config):
         """
         Helper function which constructs a listening server, using the default
         growler.http.protocol.Protocol which responds to this app.
@@ -344,16 +367,25 @@ class Application(object):
         This function exists only to remove boilerplate code for starting up a
         growler app.
 
-        @param server_config: These keyword arguments parameters are passed
+        :param gen_coroutine bool: If True, this function only returns the
+            coroutine generator returned by self.loop.create_server, else it
+            will 'run_until_complete' the generator and return the created
+            server object.
+        :param server_config: These keyword arguments parameters are passed
             directly to the BaseEventLoop.create_server function. Consult their
             documentation for details.
-        @returns asyncio.coroutine which should be run inside a call to
-            loop.run_until_complete()
+        :returns mixed: An asyncio.coroutine which should be run inside a call
+            to loop.run_until_complete() if gen_coroutine is True, else an
+            asyncio.Server object created with teh server_config parameters.
         """
-        return self.loop.create_server(
-            GrowlerHTTPProtocol.get_factory(self),
+        create_server = self.loop.create_server(
+            self._protocol_factory(self),
             **server_config
         )
+        if gen_coroutine:
+            return create_server
+        else:
+            return self.loop.run_until_complete(create_server)
 
     def create_server_and_run_forever(self, **server_config):
         """
@@ -363,9 +395,9 @@ class Application(object):
         This function exists only to remove boilerplate code for starting up a
         growler app.
 
-        @param server_config: These keyword arguments parameters are passed
+        :param server_config: These keyword arguments parameters are passed
             directly to the BaseEventLoop.create_server function. Consult their
             documentation for details.
         """
-        self.loop.run_until_complete(self.create_server(**server_config))
+        self.create_server(**server_config)
         self.loop.run_forever()

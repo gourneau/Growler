@@ -43,14 +43,18 @@ class GrowlerProtocol(asyncio.Protocol):
     instance of the protocol.
     """
 
+    transport = None
+    responders = None
+    is_done_transmitting = False
+
     def __init__(self, loop, responder_factory):
         """
         Construct a GrowlerProtocol object.
 
-        @param loop asyncio.BaseEventLoop: The event loop managing all
+        :param loop asyncio.BaseEventLoop: The event loop managing all
             asynchronous activity of this protocol.
 
-        @param responder_factory runnable: A callable which returns the first
+        :param responder_factory runnable: A callable which returns the first
             responder for this protocol. This could simply be a constructor for
             the type (i.e. the type's name). This function will only be passed
             the protocol object. The event loop should be aquired from the
@@ -59,29 +63,32 @@ class GrowlerProtocol(asyncio.Protocol):
             bytes received. Note: 'on_data' should only me a function and NOT a
             coroutine.
         """
-        print("[GrowlerProtocol::__init__]", id(self))
         self.make_responder = responder_factory
-        self.loop = asyncio.get_event_loop if loop is None else loop
-        self.data_queue = asyncio.Queue()
+        self.loop = loop if (loop is not None) else asyncio.get_event_loop()
 
     def connection_made(self, transport):
         """
         asyncio.Protocol member - called upon when there is a new socket
         connection. This creates a new responder (as determined by the member
-        'responder_type') and stores in a list for
+        'responder_type') and stores in a list. Incoming data from this
+        connection will always call
+        on_data to the last element of this list.
 
-        @param transport asyncio.Transport: The Transport handling the socket
+        :param transport asyncio.Transport: The Transport handling the socket
             communication
         """
-        print("[GrowlerProtocol::connection_made]", id(self))
-
-        self.responders = [self.make_responder(self)]
         self.transport = transport
-        self.remote_hostname, self.remote_port = transport.get_extra_info(
-                                                        'peername')
-        self.socket = transport.get_extra_info('socket')
-        self.cipher = transport.get_extra_info('cipher')
-        self.is_done_transmitting = False
+        self.responders = [self.make_responder(self)]
+
+        try:
+            good_func = callable(self.responders[0].on_data)
+        except AttributeError:
+            good_func = False
+
+        if not good_func:
+            err_str = "Provided responder MUST implement an 'on_data' method"
+            raise TypeError(err_str)
+
         print("Growler Connection from {}:{}".format(self.remote_hostname,
                                                      self.remote_port))
 
@@ -89,7 +96,7 @@ class GrowlerProtocol(asyncio.Protocol):
         """
         asyncio.Protocol member - called upon when a socket closes.
 
-        @param exc Exception: Error if unexpected closing. None if clean close
+        :param exc Exception: Error if unexpected closing. None if clean close
         """
         if exc:
             print("[connection_lost]", exc, file=sys.stderr)
@@ -99,13 +106,12 @@ class GrowlerProtocol(asyncio.Protocol):
         """
         asyncio.Protocol member - called upon when there is data to be read
 
-        @param transport bytes: bytes in the latest data transmission
+        :param transport bytes: bytes in the latest data transmission
         """
         try:
             self.responders[-1].on_data(data)
         except Exception as error:
             self.handle_error(error)
-        # self.loop.call_soon(self.responders[-1].on_data, data)
 
     def eof_received(self):
         """
@@ -121,9 +127,29 @@ class GrowlerProtocol(asyncio.Protocol):
         during a responder's on_data() function. There is no default
         functionality and the subclasses must overload this.
 
-        @param error: Exception thrown in code
+        :param error: Exception thrown in code
         """
-        raise NotImplemented
+        raise NotImplementedError()
+
+    @property
+    def socket(self):
+        return self.transport.get_extra_info('socket')
+
+    @property
+    def cipher(self):
+        return self.transport.get_extra_info('cipher')
+
+    @property
+    def remote_hostname(self):
+        return self.transport.get_extra_info('peername')[0]
+
+    @property
+    def remote_port(self):
+        return self.transport.get_extra_info('peername')[1]
+
+    @property
+    def peername(self):
+        return self.transport.get_extra_info('peername')
 
     @classmethod
     def factory(cls, *args, **kw):

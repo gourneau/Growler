@@ -19,9 +19,14 @@ REQUIRES = [
 ]
 
 OPTIONAL_REQUIRES = {
-  'jade': ['pyjade'],
-  ':python_version=="3.3"': ['asyncio>=0.2.1']
+    'jade': ['pyjade'],
+    ':python_version=="3.3"': ['asyncio>=0.2.1']
 }
+
+TESTS_REQUIRE = [
+    'pytest',
+    'pytest-asyncio',
+]
 
 PACKAGES = find_packages(
     exclude=["*.tests", "*.tests.*", "tests.*", "tests"]
@@ -34,16 +39,19 @@ NAMESPACES = [
     'growler.mw',
 ]
 
+tar_url = 'https://github.com/pygrowler/growler/archive/v%s.tar.gz' % (metadata.version)  # noqa
+
 setup(
     name="growler",
     version=metadata.version,
     author=metadata.author,
     license=metadata.license,
     url=metadata.url,
+    download_url=tar_url,
     author_email=metadata.author_email,
     description=__doc__.strip(),
     classifiers=[
-        "Development Status :: 2 - Pre-Alpha",
+        "Development Status :: 4 - Beta",
         "Environment :: Web Environment",
         "Operating System :: OS Independent",
         # "Framework :: Growler",
@@ -56,6 +64,7 @@ setup(
     ],
     install_requires=REQUIRES,
     extras_require=OPTIONAL_REQUIRES,
+    tests_require=TESTS_REQUIRE,
     packages=PACKAGES,
     namespace_packages=NAMESPACES,
     platforms='all',

@@ -1,6 +1,8 @@
 #
 # growler/http/__init__.py
 #
+# flake8: noqa
+#
 """
 Sub-package dealing with HTTP implementation. In this pacakge we have the
 asyncio protocol, server, parser, and request and response objects.
@@ -10,8 +12,9 @@ from .parser import Parser
 from .request import HTTPRequest
 from .response import HTTPResponse
 from .protocol import GrowlerHTTPProtocol
-from .server import create_server
 from .errors import __all__ as http_errors
+from .status import Status
+from .methods import HTTPMethod
 
 from http.server import BaseHTTPRequestHandler
 
@@ -45,8 +48,4 @@ HEADER_DELIM = EOL * 2
 
 RESPONSES = BaseHTTPRequestHandler.responses
 
-HTTPCodes = {
-  200: "OK",
-  301: "Moved Permanently",
-  302: "Found"
-}
+HTTPStatusPhrase = Status.Phrase
